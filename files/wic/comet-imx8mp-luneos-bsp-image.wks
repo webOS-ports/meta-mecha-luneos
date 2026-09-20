@@ -1,0 +1,25 @@
+# Copyright (c) 2026, Herman van Hazendonk
+# Released under the MIT license (see COPYING.MIT for the terms)
+#
+# Mecha Comet (i.MX8M Plus) disk layout.
+#
+# The i.MX8M boot ROM looks for its image container at a fixed 32 KiB into the
+# boot medium on SD and on the eMMC user area, so the first 32 KiB has to stay
+# free for the GPT and flash.bin starts exactly there. --no-table keeps it out
+# of the partition table: it is a raw region the ROM reads by offset, not a
+# partition anything mounts.
+#
+# The raw region runs to 8 MiB rather than stopping after flash.bin, because
+# u-boot's environment lives in the same raw area and past the end of the
+# container: CONFIG_ENV_OFFSET is 0x700000 (7 MiB) and CONFIG_ENV_OFFSET_REDUND
+# is 0x20400 (129 KiB). A /boot partition starting before 8 MiB would be
+# overwritten by the first "saveenv".
+#
+# COMET_DDR_VARIANT picks which of the three DDR builds is written here; see
+# conf/machine/comet-imx8mp.conf.
+
+part u-boot  --offset 32   --fixed-size 8160K --source rawcopy --no-table --sourceparams="file=flash.bin-${COMET_DDR_VARIANT}"
+part /boot   --offset 8192 --size 128M --active --source bootimg-partition --fstype=vfat --label boot --use-uuid --sourceparams="loader=u-boot"
+part /                                          --source rootfs            --fstype=ext4 --label luneos-rootfs --use-uuid
+
+bootloader --ptable gpt --configfile="comet-imx8mp-boot.conf"

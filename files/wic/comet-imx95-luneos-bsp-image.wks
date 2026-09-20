@@ -1,0 +1,24 @@
+# Copyright (c) 2026, Herman van Hazendonk
+# Released under the MIT license (see COPYING.MIT for the terms)
+#
+# Mecha Comet (i.MX95) disk layout.
+#
+# Same shape as the 8M Plus: a raw gap for the boot container the ROM reads by
+# offset, then /boot and the rootfs. The container's contents differ completely
+# (ELE firmware + M33 System Manager + OEI/DDR + TF-A rather than DDR PHY blobs
+# + SPL), but that is u-boot's business, not the partition table's.
+#
+# The two numbers to re-check against Mecha's board when it is published are the
+# 32 KiB container offset and the size of the raw gap, which has to clear
+# whatever CONFIG_ENV_OFFSET their i.MX95 defconfig ends up using. Both are
+# copied from the 8M Plus here because there is no board to read them off yet.
+#
+# The console in comet-imx95-boot.conf is a guess for the same reason: the
+# i.MX95 debug UART is an LPUART (ttyLP*), not the 8M's ttymxc*, but which
+# instance the Comet wires to is in a device tree that does not exist yet.
+
+part u-boot  --offset 32   --fixed-size 8160K --source rawcopy --no-table --sourceparams="file=flash.bin"
+part /boot   --offset 8192 --size 128M --active --source bootimg-partition --fstype=vfat --label boot --use-uuid --sourceparams="loader=u-boot"
+part /                                          --source rootfs            --fstype=ext4 --label luneos-rootfs --use-uuid
+
+bootloader --ptable gpt --configfile="comet-imx95-boot.conf"
