@@ -54,5 +54,3 @@ MACHINE_EXTRA_RDEPENDS = " \
     libcamera-gst \
 "
 
-# Boot-time hardware state dump - see meta-pine64-luneos/recipes-support/luneos-diag
-MACHINE_EXTRA_RRECOMMENDS += "luneos-diag"
