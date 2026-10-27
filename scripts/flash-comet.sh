@@ -19,6 +19,7 @@ set -eu
 
 MACHINE=${MACHINE:-comet-imx8mp}
 RAM=8gb
+RAM_EXPLICIT=0
 DEPLOY=
 IMAGE=
 ASSUME_YES=0
@@ -59,6 +60,15 @@ Getting the Comet into fastboot:
   calls "fastboot 0" when it cannot, so a board with an empty eMMC is already
   waiting. On a board that does boot, interrupt u-boot on the serial console
   (115200 8N1 on ttymxc1) and run: fastboot 0
+
+After installing on a board that has run Mecha's own OS:
+  The saved u-boot environment lives in the eMMC raw area (CONFIG_ENV_OFFSET
+  0x700000, ENV_MMC_DEVICE_INDEX 2) and nothing written to a microSD clears it.
+  An inherited environment boots LuneOS's kernel with the vendor's command line
+  - module_blacklist=imx_lcdif leaves the display controller unbound - because
+  bsp_bootcmd builds bootargs itself instead of using extlinux/extlinux.conf.
+  Clear it once on the serial console: env default -a; saveenv; reset
+  Then check: cat /proc/cmdline
 EOF
 }
 
@@ -190,6 +200,55 @@ SCRATCH=
 cleanup() { [ -n "$SCRATCH" ] && rm -rf "$SCRATCH"; return 0; }
 trap cleanup EXIT INT TERM
 
+# Which DDR variant is baked into this .wic, by comparing the bytes at the
+# container offset against each flash.bin we have. Prints the variant, or
+# nothing if none matches (a foreign image, or a layout change).
+#
+# Worth the few seconds it costs: the image carries one SPL, chosen at build
+# time by COMET_DDR_VARIANT, and writing the wrong one to a board replaces a
+# working bootloader with one that cannot train its memory. "emmc" and "sd"
+# write that embedded copy, and no amount of --ram changes it - --ram only
+# selects which standalone flash.bin the bootloader-* commands push.
+embedded_variant() {
+    _img=$1 _d=$2
+    # Read the container straight out of the image. bs=512 skip=64 is the same
+    # 32 KiB offset as bs=1 skip=32768 without the million single-byte reads,
+    # and a .wic.gz is streamed rather than expanded: gzip is sequential, so
+    # stopping after ~1.6 MB costs nothing like a full decompression.
+    case "$_img" in
+        *.gz) _reader="gunzip -c '$_img'" ;;
+        *)    _reader="cat '$_img'" ;;
+    esac
+    for _v in 2gb 4gb 8gb; do
+        _fb="$_d/flash.bin-$_v"
+        [ -e "$_fb" ] || continue
+        _n=$(wc -c < "$_fb" 2>/dev/null) || continue
+        _blocks=$(( (_n + 511) / 512 ))
+        if eval "$_reader" 2>/dev/null \
+             | dd bs=512 skip=64 count="$_blocks" 2>/dev/null \
+             | dd bs=1 count="$_n" 2>/dev/null \
+             | cmp -s - "$_fb"; then
+            printf '%s' "$_v"; return
+        fi
+    done
+}
+
+# Refuse to write an image whose embedded SPL is not the board's DDR size.
+check_embedded() {
+    _raw=$1 _d=$2
+    _emb=$(embedded_variant "$_raw" "$_d")
+    if [ -z "$_emb" ]; then
+        say "Embedded bootloader: unrecognised (not one of this build's flash.bin files)."
+        return 0
+    fi
+    say "Embedded bootloader: $_emb"
+    if [ "$RAM_EXPLICIT" = "1" ] && [ "$_emb" != "$RAM" ]; then
+        die "this image embeds the $_emb bootloader but you asked for $RAM.
+Writing it would put a $_emb SPL on a $RAM board, which cannot train its memory.
+Rebuild with COMET_DDR_VARIANT = \"$RAM\" in local.conf, or drop -r to write it anyway."
+    fi
+}
+
 # Sets RAW, rather than printing the path for $( ) to capture.
 #
 # A command substitution runs in a subshell, so an assignment to SCRATCH inside
@@ -236,6 +295,7 @@ cmd_sd() {
     _d=$(find_deploy)
     _img=$(find_image "$_d")
     say "Image:  $_img"
+    check_embedded "$_img" "$_d"
     confirm "$_dev"
 
     # bmaptool skips the unallocated parts of the image, which on a sparse
@@ -284,6 +344,10 @@ cmd_emmc() {
     fastboot devices
     say ""
     say "Image: $_img"
+    # Before the prompt and before decompressing 700+ MB: a wrong SPL is the one
+    # mistake here that costs a working bootloader, so it should fail first, not
+    # after the user has already typed ERASE.
+    check_embedded "$_img" "$_d"
     say "This overwrites the whole eMMC user area (fastboot alias 'all' -> mmc 2:0)."
     if [ "$ASSUME_YES" != "1" ]; then
         printf 'Type ERASE to continue: '
@@ -324,6 +388,7 @@ cmd_uuu() {
     _d=$(find_deploy)
     _fb=$(find_bootloader "$_d")
     _img=$(find_image "$_d")
+    check_embedded "$_img" "$_d"
 
     raw_image "$_img"; _raw=$RAW
 
@@ -332,7 +397,7 @@ cmd_uuu() {
     say "while applying power), then plug in USB-C. 'uuu -lsusb' should list it."
     say ""
     say "Bootloader: $_fb"
-    say "Image:      $_raw"
+    say "Image:      $_img"
     if [ "$ASSUME_YES" != "1" ]; then
         printf 'Type ERASE to continue: '
         read -r _answer
@@ -351,7 +416,7 @@ while [ $# -gt 0 ]; do
     case "$1" in
         -d|--deploy)  DEPLOY=${2:?missing dir}; shift 2 ;;
         -M|--machine) MACHINE=${2:?missing machine}; shift 2 ;;
-        -r|--ram)     RAM=${2:?missing size}; shift 2 ;;
+        -r|--ram)     RAM=${2:?missing size}; RAM_EXPLICIT=1; shift 2 ;;
         -i|--image)   IMAGE=${2:?missing file}; shift 2 ;;
         -y|--yes)     ASSUME_YES=1; shift ;;
         --allow-internal) ALLOW_INTERNAL=1; shift ;;
