@@ -6,18 +6,32 @@
 # (nxpwifi, for the IW612 combo part) and the audio graph the Comet uses are all
 # downstream. A mainline imx8mp.dtsi boots the SoC and gives you a dark screen.
 #
-# Branch choice - mecha-v7.1-wip, not the default fedora-mecha-7.1:
+# Branch choice - fedora-mecha-7.2, which is where the display actually works.
 #
-#   fedora-mecha-7.1 is Fedora's kernel packaging tree with Mecha's patches on
-#   top. It carries redhat/, Makefile.rhelver, a .gitlab-ci.yml and Fedora's
-#   config machinery, none of which Yocto's kernel classes know what to do with,
-#   and its build is driven by redhat/ rather than by a defconfig. It exists so
-#   that mecha-make can turn out kernel-core RPMs for their Fedora image.
+# This recipe used to build mecha-v7.1-wip, on the reasoning that a plain kernel
+# tree suits a Yocto recipe better than Fedora's packaging tree: fedora-mecha-*
+# carries redhat/, Makefile.rhelver and a .gitlab-ci.yml, and its own builds are
+# driven by redhat/ rather than by a defconfig.
 #
-#   mecha-v7.1-wip is the same 7.1 base and the same board support with none of
-#   that: a plain kernel tree with arch/arm64/configs/mecha_v8_defconfig and
-#   arch/arm64/boot/dts/freescale/imx8mp-mecha-comet.dts. That is what a Yocto
-#   kernel recipe wants.
+# That reasoning was fine as far as it went and still produced a booting system,
+# but it picked the wrong tree. Mecha's own known-good build - the artifact they
+# point at - is fedora-mecha-7.2, and the panel work only exists there. On
+# mecha-v7.1-wip the Comet boots to userspace with no display at all, because
+# 7.2 reworked the panel in two matching halves:
+#
+#   7.1  drivers/gpu/drm/panel/panel-ddic-ch13726a.c        matches "ch13726a,rp5"
+#        DT: compatible "ch13726a,rp5", reset-gpios ACTIVE_HIGH, reset 1->0->1
+#
+#   7.2  drivers/gpu/drm/panel/panel-chipwealth-ch13726a.c  matches "mecha,comet"
+#        DT: compatible "mecha,comet",  reset-gpios ACTIVE_LOW,  reset 0->1->0
+#
+# The reset polarity is inverted on both sides at once, which is what keeps the
+# panel held in reset on 7.1. The two halves cannot be separated: backporting the
+# DT hunk alone leaves a compatible no 7.1 driver claims.
+#
+# The Fedora extras are simply ignored - redhat/ is not consulted when the build
+# comes from KBUILD_DEFCONFIG, and arch/arm64/configs/mecha_v8_defconfig is still
+# present on this branch. There is no mecha-v7.2-wip; the -wip line stops at 7.1.
 #
 # Both branches are rebased and force-pushed, so a pinned SRCREV will eventually
 # stop being reachable. Mirror the revision we pin the way meta-pine64-luneos
@@ -32,22 +46,24 @@ require recipes-kernel/linux/linux-yocto.inc
 
 FILESEXTRAPATHS:prepend := "${THISDIR}/files:"
 
-LINUX_VERSION ?= "7.1"
+LINUX_VERSION ?= "7.2"
 PV = "${LINUX_VERSION}-git"
 
 # Mecha's branch does not always carry a matching EXTRAVERSION; do not let the
 # sanity check fail the build over it. Same reasoning as linux-megi.inc.
 KERNEL_VERSION_SANITY_SKIP = "1"
 
-MECHA_BRANCH ?= "mecha-v7.1-wip"
+MECHA_BRANCH ?= "fedora-mecha-7.2"
 MECHA_REPO ?= "git://github.com/mecha-org/linux.git;branch=${MECHA_BRANCH}"
 
-# mecha-v7.1-wip tip as of 2026-09-17.
-SRCREV_machine ?= "fd642caaca85d8fa8e9d2391cfb6f9fe38bfb4be"
+# fedora-mecha-7.2 (7.2.4), the revision behind Mecha's own working kernel
+# artifact - CI run 34368096815, "fixup! arm64: dts: freescale: add imx8mp mecha
+# comet", which is the commit that carries the panel fix.
+SRCREV_machine ?= "bdac75651c25b5e6105841b144c5e4dc4714ca1c"
 
-# yocto-kernel-cache has no yocto-7.1 branch - it goes ..., 6.17, 6.18, 7.2 -
-# so there is no exact match for a 7.1 kernel. yocto-7.2 is the nearest, and
-# nothing here consumes its feature fragments anyway: the config comes from
+# yocto-7.2 now matches the kernel version exactly (it did not while this built
+# 7.1, where the nearest branch had to do). Nothing here consumes its feature
+# fragments anyway: the config comes from
 # KBUILD_DEFCONFIG plus the .cfg files above, and the kmeta is only present
 # because linux-yocto.inc expects one.
 #
